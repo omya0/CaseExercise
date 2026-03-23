@@ -1,13 +1,6 @@
-/**
- * caseAssignmentController
- *
- * Acts as the ingestion layer for all three lead sources.
- * Each method fetches a JSON string from the mock layer, deserializes it
- * into a typed DTO list, and hands it off to the service for processing.
- *
- * In production each method would call the real external system instead
- * of caseAssignmentMock — the service layer requires no changes.
- */
+// Ingestionslager för alla tre datakällor.
+// Hämtar JSON, deserialiserar till typad DTO-lista och skickar vidare till service.
+// I produktion ersätts mock-anropen med riktiga HTTP callouts.
 public with sharing class caseAssignmentController {
 
     public static void processRealTimeWebhook() {

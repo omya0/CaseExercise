@@ -1,13 +1,15 @@
+// Hanterar normalisering, deduplicering och routing av leads från alla källor.
+// Alla entry points tar emot en List så att SOQL queries aldrig körs i en loop.
 public with sharing class caseAssignmentService {
 
+    // Max antal aktiva leads en säljare får ha innan den hoppas över vid routing
     private static final Integer MAX_ACTIVE_LEADS = 5;
 
-    // Territory buckets — country codes not listed here fall into 'EU'.
-    // In production this mapping would live in Custom Metadata so it can be
-    // maintained without a code deployment.
+    // Landskoder som tillhör US-territoriet, allt annat hamnar i EU.
+    // I produktion hanteras denna mappning via Custom Metadata.
     private static final Set<String> US_CODES = new Set<String>{ 'US' };
 
-    // Public entry points (one per source type, always accepts a List)
+    // Entry points - en per källtyp, Apex väljer rätt version automatiskt baserat på listtypen
 
     public static void processLeads(List<RealTimeDTO> dtos) {
         List<LeadDTO> normalized = new List<LeadDTO>();
@@ -33,7 +35,7 @@ public with sharing class caseAssignmentService {
         processNormalizedBulk(normalized);
     }
 
-    // Normalization
+    // Normalisering - översätter varje källas fältnamn till LeadDTOs enhetliga format
 
     @TestVisible
     private static LeadDTO normalizeRealTime(RealTimeDTO dto) {
@@ -71,23 +73,23 @@ public with sharing class caseAssignmentService {
         return ld;
     }
 
-    // ─── Bulk orchestration ───────────────────────────────────────────────────
+    // Deduplicering - hanterar hela batchen med fyra SOQL queries oavsett storlek
 
     @TestVisible
     private static void processNormalizedBulk(List<LeadDTO> dtos) {
 
-        // ── Step 1: Collect all dedup keys from the entire batch ──────────────
+        // Steg 1: Samla alla dedup-nycklar från hela batchen i Sets
         Set<String> emails    = new Set<String>();
         Set<String> lastNames = new Set<String>();
         Set<String> companies = new Set<String>();
 
         for (LeadDTO dto : dtos) {
-            if (String.isNotBlank(dto.email))   emails.add(dto.email);
+            if (String.isNotBlank(dto.email))    emails.add(dto.email);
             if (String.isNotBlank(dto.lastName)) lastNames.add(dto.lastName);
             if (String.isNotBlank(dto.company))  companies.add(dto.company);
         }
 
-        // ── Step 2: ONE SOQL to find all email matches ────────────────────────
+        // Steg 2: En SOQL query för att hitta email-träffar
         Map<String, Lead> existingByEmail = new Map<String, Lead>();
         for (Lead l : [
             SELECT Id, FirstName, LastName, Email, Company, Country, OwnerId
@@ -98,9 +100,8 @@ public with sharing class caseAssignmentService {
             existingByEmail.put(l.Email, l);
         }
 
-        // ── Step 3: ONE SOQL to find all name+company matches ─────────────────
-        // We query broadly (LastName IN + Company IN) and filter the exact
-        // combination in Apex memory to avoid false positives.
+        // Steg 3: En SOQL query för att hitta namn+företag-träffar
+        // Queryn är bred (LastName IN + Company IN) och filtreras till exakta kombinationer i minnet
         Map<String, Lead> existingByNameCompany = new Map<String, Lead>();
         for (Lead l : [
             SELECT Id, FirstName, LastName, Email, Company, Country, OwnerId
@@ -113,7 +114,7 @@ public with sharing class caseAssignmentService {
             existingByNameCompany.put(key, l);
         }
 
-        // ── Step 4: Categorise each DTO ───────────────────────────────────────
+        // Steg 4: Kategorisera varje lead som duplikat eller nytt
         List<Lead>    toUpdate = new List<Lead>();
         List<LeadDTO> toCreate = new List<LeadDTO>();
 
@@ -135,39 +136,29 @@ public with sharing class caseAssignmentService {
             }
         }
 
-        // ── Step 5: ONE bulk DML to update duplicates ─────────────────────────
+        // Steg 5: En bulk DML update för alla duplikat
         if (!toUpdate.isEmpty()) {
             update toUpdate;
         }
 
-        // ── Step 6: Route + ONE bulk DML to insert new leads ──────────────────
+        // Steg 6: Routing + en bulk DML insert för alla nya leads
         if (!toCreate.isEmpty()) {
             insert buildAndRouteNewLeads(toCreate);
         }
     }
 
-    // ─── Routing ─────────────────────────────────────────────────────────────
-
-    /**
-     * Builds Lead SObjects for all new DTOs and assigns an owner to each
-     * using a "least-loaded under capacity" strategy — all in memory after
-     * two SOQL queries (one for users, one aggregate for lead counts).
-     *
-     * Crucially, the in-memory counter is incremented after each assignment
-     * so that leads within the same batch are distributed correctly without
-     * additional round-trips to the database.
-     *
-     * NOTE: User.Country = 'US' | 'EU' is used as territory proxy.
-     *       In production this should be a dedicated Territory__c custom field.
-     */
+    // Routing - tilldelar säljare till nya leads baserat på territorium och kapacitet
+    // Använder "least-loaded" strategi: säljaren med minst aktiva leads får nästa lead.
+    // User.Country används som territoriummarkör - bör ersättas med Territory__c i produktion.
     private static List<Lead> buildAndRouteNewLeads(List<LeadDTO> dtos) {
 
-        // Collect all territories needed in this batch
+        // Samla alla territorier som förekommer i batchen
         Set<String> territories = new Set<String>();
         for (LeadDTO dto : dtos) {
             if (String.isNotBlank(dto.territory)) territories.add(dto.territory);
         }
 
+        // En SOQL query för att hämta alla eligibla säljare i relevanta territorier
         List<User> allReps = [
             SELECT Id, Country
             FROM User
@@ -175,7 +166,7 @@ public with sharing class caseAssignmentService {
               AND IsActive = true
         ];
 
-        // Group rep IDs by territory
+        // Gruppera säljar-IDs per territorium för snabb uppslagning
         Map<String, List<Id>> repsByTerritory = new Map<String, List<Id>>();
         for (User u : allReps) {
             if (!repsByTerritory.containsKey(u.Country)) {
@@ -184,11 +175,11 @@ public with sharing class caseAssignmentService {
             repsByTerritory.get(u.Country).add(u.Id);
         }
 
-        // ONE aggregate SOQL: active lead counts for all eligible reps
+        // En aggregat SOQL query för att räkna aktiva leads per säljare
         Set<Id> allRepIds = new Map<Id, User>(allReps).keySet();
         Map<Id, Integer> leadCountByRep = new Map<Id, Integer>();
         for (Id repId : allRepIds) {
-            leadCountByRep.put(repId, 0); // initialise at 0 (reps with no leads won't appear in aggregate)
+            leadCountByRep.put(repId, 0); // initieras till 0 då säljare utan leads inte syns i aggregat query
         }
         for (AggregateResult ar : [
             SELECT OwnerId, COUNT(Id) cnt
@@ -200,7 +191,7 @@ public with sharing class caseAssignmentService {
             leadCountByRep.put((Id) ar.get('OwnerId'), (Integer) ar.get('cnt'));
         }
 
-        // Assign owners in memory — no further SOQL needed
+        // Tilldela säljare i minnet - inga fler SOQL queries behövs
         List<Lead> newLeads = new List<Lead>();
         for (LeadDTO dto : dtos) {
             Lead l = new Lead(
@@ -216,7 +207,7 @@ public with sharing class caseAssignmentService {
             Id bestRep = pickBestRep(repsForTerritory, leadCountByRep);
             if (bestRep != null) {
                 l.OwnerId = bestRep;
-                // Increment in memory so the next lead in this batch sees the updated count
+                // Räknaren uppdateras i minnet så att nästa lead i samma batch ser rätt antal
                 leadCountByRep.put(bestRep, leadCountByRep.get(bestRep) + 1);
             }
 
@@ -230,7 +221,7 @@ public with sharing class caseAssignmentService {
         if (repIds == null || repIds.isEmpty()) return null;
 
         Id      bestRep  = null;
-        Integer minCount = MAX_ACTIVE_LEADS; // only accept strictly less than MAX
+        Integer minCount = MAX_ACTIVE_LEADS; // säljaren måste ha strikt färre än MAX
 
         for (Id repId : repIds) {
             Integer count = leadCountByRep.get(repId);
@@ -243,18 +234,17 @@ public with sharing class caseAssignmentService {
         return bestRep;
     }
 
-    // ─── Helpers ──────────────────────────────────────────────────────────────
+    // Hjälpmetoder
 
-    /**
-     * Maps any incoming country/region code to a territory bucket ('US' or 'EU').
-     * In production this would be driven by Custom Metadata for easy maintenance.
-     */
+    // Mappar landskoder till territorium-bucket ('US' eller 'EU').
+    // I produktion driven av Custom Metadata.
     @TestVisible
     private static String mapToTerritory(String countryCode) {
         if (String.isBlank(countryCode)) return 'EU';
         return US_CODES.contains(countryCode.toUpperCase()) ? 'US' : 'EU';
     }
 
+    // Bygger en unik nyckel av förnamn, efternamn och företag för deduplicering
     private static String nameKey(String first, String last, String company) {
         return first + '|' + last + '|' + company;
     }

@@ -1,12 +1,5 @@
-/**
- * DTO for Source 2: Nightly Bulk CSV (External Marketing Agency)
- * Field names match the JSON payload keys exactly (snake_case with capitals)
- * so that JSON.deserialize() can map them automatically.
- *
- * Raw payload:
- * { "First_Name": "...", "Last_Name": "...", "Email": "...",
- *   "Company": "...", "Region": "...", "Row_ID": "..." }
- */
+// DTO för källa 2: Nightly Bulk CSV (extern marknadsföringsbyrå)
+// Fältnamnen matchar JSON-nycklarna exakt (snake_case) så att JSON.deserialize() kan mappa dem automatiskt.
 public class BulkDTO {
     public String First_Name;
     public String Last_Name;

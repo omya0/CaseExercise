@@ -1,15 +1,5 @@
-/**
- * DTO for Source 3: Third-Party API (External Event Platform)
- * The class structure mirrors the nested JSON payload exactly
- * so that JSON.deserialize() can map all levels automatically.
- *
- * Raw payload:
- * { "user": { "name": { "first": "...", "last": "..." },
- *             "contact": { "email": "..." } },
- *   "employer": "...",
- *   "location": { "countryCode": "..." },
- *   "eventId": "..." }
- */
+// DTO för källa 3: Third-Party API (extern eventplattform)
+// Klassstrukturen speglar den nästlade JSON-strukturen så att JSON.deserialize() kan mappa alla nivåer automatiskt.
 public class APIDTO {
     public UserWrapper     user;
     public String          employer;

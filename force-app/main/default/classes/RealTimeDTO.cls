@@ -1,12 +1,5 @@
-/**
- * DTO for Source 1: Real-time Webhook (Marketing Website)
- * Field names match the JSON payload keys exactly so that
- * JSON.deserialize() can map them automatically.
- *
- * Raw payload:
- * { "firstName": "...", "lastName": "...", "emailAddress": "...",
- *   "companyName": "...", "country": "...", "campaignId": "..." }
- */
+// DTO för källa 1: Real-time Webhook (marknadsföringswebbplatsen)
+// Fältnamnen matchar JSON-nycklarna exakt så att JSON.deserialize() kan mappa dem automatiskt.
 public class RealTimeDTO {
     public String firstName;
     public String lastName;
