@@ -152,13 +152,13 @@ public with sharing class caseAssignmentService {
     // User.Country används som territoriummarkör - bör ersättas med Territory__c i produktion.
     private static List<Lead> buildAndRouteNewLeads(List<LeadDTO> dtos) {
 
-        // Samla alla territorier som förekommer i batchen
+        // Samla alla territorier som förekommer i batchen i en "territories" samling
         Set<String> territories = new Set<String>();
         for (LeadDTO dto : dtos) {
             if (String.isNotBlank(dto.territory)) territories.add(dto.territory);
         }
 
-        // En SOQL query för att hämta alla eligibla säljare i relevanta territorier
+        // En SOQL query för att hämta alla eligibla säljare i relevanta territorier "ge mig alla aktiva säljare vars country matchar något av territorier"
         List<User> allReps = [
             SELECT Id, Country
             FROM User
@@ -166,7 +166,7 @@ public with sharing class caseAssignmentService {
               AND IsActive = true
         ];
 
-        // Gruppera säljar-IDs per territorium för snabb uppslagning
+        // Gruppera säljar-IDs per territorium för snabb uppslagning, vi skapar en samling av säljare efter territorium alltså EU eller US
         Map<String, List<Id>> repsByTerritory = new Map<String, List<Id>>();
         for (User u : allReps) {
             if (!repsByTerritory.containsKey(u.Country)) {
@@ -177,24 +177,24 @@ public with sharing class caseAssignmentService {
 
         // En aggregat SOQL query för att räkna aktiva leads per säljare
         Set<Id> allRepIds = new Map<Id, User>(allReps).keySet();
-        Map<Id, Integer> leadCountByRep = new Map<Id, Integer>();
+        Map<Id, Integer> leadCountByRep = new Map<Id, Integer>(); 
         for (Id repId : allRepIds) {
-            leadCountByRep.put(repId, 0); // initieras till 0 då säljare utan leads inte syns i aggregat query
+            leadCountByRep.put(repId, 0); // initieras till 0 i mappen då säljare utan leads inte syns i aggregat query, salesforce returnerar ej
         }
         for (AggregateResult ar : [
-            SELECT OwnerId, COUNT(Id) cnt
+            SELECT OwnerId, COUNT(Id) cnt // query visar hur många leads varje säljare faktsikt har
             FROM Lead
             WHERE OwnerId     IN :allRepIds
               AND IsConverted = false
             GROUP BY OwnerId
         ]) {
-            leadCountByRep.put((Id) ar.get('OwnerId'), (Integer) ar.get('cnt'));
+            leadCountByRep.put((Id) ar.get('OwnerId'), (Integer) ar.get('cnt')); //uppdaterar mappen med dessa siffror
         }
 
         // Tilldela säljare i minnet - inga fler SOQL queries behövs
         List<Lead> newLeads = new List<Lead>();
         for (LeadDTO dto : dtos) {
-            Lead l = new Lead(
+            Lead l = new Lead( //nytt Lead objekt skapas för varje inkommande lead från loopen
                 FirstName = dto.firstName,
                 LastName  = dto.lastName,
                 Email     = dto.email,
@@ -203,8 +203,8 @@ public with sharing class caseAssignmentService {
                 Status    = 'Open - Not Contacted'
             );
 
-            List<Id> repsForTerritory = repsByTerritory.get(dto.territory);
-            Id bestRep = pickBestRep(repsForTerritory, leadCountByRep);
+            List<Id> repsForTerritory = repsByTerritory.get(dto.territory); 
+            Id bestRep = pickBestRep(repsForTerritory, leadCountByRep); //med hänsyn till territory och lead count så avgörs man om man är mest eligible
             if (bestRep != null) {
                 l.OwnerId = bestRep;
                 // Räknaren uppdateras i minnet så att nästa lead i samma batch ser rätt antal
@@ -217,21 +217,21 @@ public with sharing class caseAssignmentService {
         return newLeads;
     }
 
-    private static Id pickBestRep(List<Id> repIds, Map<Id, Integer> leadCountByRep) {
-        if (repIds == null || repIds.isEmpty()) return null;
+    private static Id pickBestRep(List<Id> repIds, Map<Id, Integer> leadCountByRep) { //pickbestrep får in en lista med möjliga säljare + map som visar antal leads per säljare
+        if (repIds == null || repIds.isEmpty()) return null; // 0 retur vid tom lista
 
         Id      bestRep  = null;
-        Integer minCount = MAX_ACTIVE_LEADS; // säljaren måste ha strikt färre än MAX
+        Integer minCount = MAX_ACTIVE_LEADS; 
 
         for (Id repId : repIds) {
-            Integer count = leadCountByRep.get(repId);
-            if (count < minCount) {
+            Integer count = leadCountByRep.get(repId); //kollar hur många leads alla säljare har, minst antal leads inom 5 lead gränsen blir bestRep
+            if (count < minCount) { 
                 minCount = count;
                 bestRep  = repId;
             }
         }
 
-        return bestRep;
+        return bestRep; 
     }
 
     // Hjälpmetoder
@@ -239,12 +239,12 @@ public with sharing class caseAssignmentService {
     // Mappar landskoder till territorium-bucket ('US' eller 'EU').
     // I produktion driven av Custom Metadata.
     @TestVisible
-    private static String mapToTerritory(String countryCode) {
+    private static String mapToTerritory(String countryCode) { //om landskoden är tom, EU, om landskoden finns och finns i US_CODES setet, US
         if (String.isBlank(countryCode)) return 'EU';
         return US_CODES.contains(countryCode.toUpperCase()) ? 'US' : 'EU';
     }
 
-    // Bygger en unik nyckel av förnamn, efternamn och företag för deduplicering
+    // Bygger en unik nyckel av förnamn, efternamn och företag för deduplicering 
     private static String nameKey(String first, String last, String company) {
         return first + '|' + last + '|' + company;
     }
